@@ -1,74 +1,97 @@
 #include <string.h>
+#include <stdlib.h>
 #include "render.h"
+#include "lua_helper.h"
 #include "fonts/font8x8.h"
 
-void draw_char(uint32_t *buffer, int buf_width, int buf_height, int x, int y, uint32_t c, uint32_t color_background, uint32_t color_text, uint32_t color_shadow, int scale, int shadow_offsetX, int shadow_offsetY) {
-  const uint8_t *glyph = get_glyph(c);
-
-  for (int row = 0; row < 8; row++) {
-    uint8_t line = glyph[row];
-    for (int col = 0; col < 8; col++) {
-      if (line & (1 << col)) {
-        for (int sy = 0; sy < scale; sy++) {
-          for (int sx = 0; sx < scale; sx++) {
-            int px = x + col * scale + sx;
-            int py = y + row * scale + sy;
-            if (px >= 0 && px < buf_width && py >= 0 && py < buf_height) {
-              buffer[py * buf_width + px] = color_text;
-            }
-          }
-        }
-        
-        for (int sy = 0; sy < scale; sy++) {
-          for (int sx = 0; sx < scale; sx++) {
-            int px = x + col * scale + sx + shadow_offsetX;
-            int py = y + row * scale + sy + shadow_offsetY;
-            if (px >= 0 && px < buf_width && py >= 0 && py < buf_height) {
-              if (buffer[py * buf_width + px] == color_background) {
-                buffer[py * buf_width + px] = color_shadow;
-              }
-            }
-          }
-        }
-      }
-    }
-  }
+void draw_filled_rect(uint32_t *buffer, int buf_width, int buf_height, int x, int y, int w, int h, uint32_t color) {
+	for (int dy = 0; dy < h; dy++) {
+		int py = y + dy;
+		if (py < 0 || py >= buf_height) continue;
+		for (int dx = 0; dx < w; dx++) {
+			int px = x + dx;
+			if (px < 0 || px >= buf_width) continue;
+			buffer[py * buf_width + px] = color;
+		}
+	}
 }
 
-void draw_text(uint32_t *buffer, int buf_width, int buf_height,
-               const uint32_t *text, int x, int y, uint32_t color_background, uint32_t color_text, uint32_t color_shadow, int scale, int shadow_offsetX, int shadow_offsetY) {
-  for (int i = 0; text[i] != 0; i++) {
-    draw_char(buffer, buf_width, buf_height, x + i * 8 * scale, y, text[i], color_background, color_text, color_shadow, scale, shadow_offsetX, shadow_offsetY);
-  }
+void draw_line(uint32_t *buffer, int buf_width, int buf_height, int x0, int y0, int x1, int y1, int thickness, uint32_t color) {
+	int dx = abs(x1 - x0);
+	int dy = abs(y1 - y0);
+	int sx = (x0 < x1) ? 1 : -1;
+	int sy = (y0 < y1) ? 1 : -1;
+	int err = dx - dy;
+
+	int half = thickness / 2;
+
+	while (1) {
+		for (int ty = -half; ty < thickness - half; ty++) {
+			for (int tx = -half; tx < thickness - half; tx++) {
+				int px = x0 + tx;
+				int py = y0 + ty;
+				if (px >= 0 && px < buf_width && py >= 0 && py < buf_height) {
+					buffer[py * buf_width + px] = color;
+				}
+			}
+		}
+
+		if (x0 == x1 && y0 == y1) break;
+
+		int e2 = 2 * err;
+		if (e2 > -dy) {
+			err -= dy;
+			x0 += sx;
+		}
+		if (e2 < dx) {
+			err += dx;
+			y0 += sy;
+		}
+	}
+}
+
+void draw_char_glyph(uint32_t *buffer, int buf_width, int buf_height, const char *str, int start_x, int y, int scale, uint32_t color) {
+	if (!str) return;
+	int cur_x = start_x;
+	const char *p = str;
+
+	while (*p) {
+		uint32_t codepoint = utf8_decode(p);
+		const uint8_t *glyph = get_glyph(codepoint);
+
+		for (int row = 0; row < 8; row++) {
+			for (int col = 0; col < 8; col++) {
+				if (glyph[row] & (1 << col)) {
+					for (int sy = 0; sy < scale; sy++) {
+						for (int sx = 0; sx < scale; sx++) {
+							int px = cur_x + (col * scale) + sx;
+							int py = y + (row * scale) + sy;
+							if (px >= 0 && px < buf_width && py >= 0 && py < buf_height) {
+								buffer[py * buf_width + px] = color;
+							}
+						}
+					}
+				}
+			}
+		}
+
+		unsigned char c = *p;
+		if (c < 0x80) p += 1;
+		else if ((c & 0xE0) == 0xC0) p += 2;
+		else if ((c & 0xF0) == 0xE0) p += 3;
+		else if ((c & 0xF8) == 0xF0) p += 4;
+		else p += 1;
+
+		cur_x += 8 * scale;
+	}
 }
 
 void draw_frame(struct wayland_state *state) {
-  int pixel_count = state->width * state->height;
+	int pixel_count = state->width * state->height;
+	trigger_update_event(state->L);
+	memcpy(state->shm_data, state->offscreen_buffer, pixel_count * sizeof(uint32_t));
 
-  for (int i = 0; i < pixel_count; i++) {
-    state->offscreen_buffer[i] = state->COLOR_BACKGROUND;
-  }
-
-  for (int y = 0; y < state->row; y++) {
-    draw_text(
-      state->offscreen_buffer,
-      state->width,
-      state->height,
-      state->content[y],
-      0,
-      y * 8 * state->scale,
-      state->COLOR_BACKGROUND,
-      state->COLOR_TEXT,
-      state->COLOR_SHADOW,
-      state->scale,
-      state->shadow_offsetX,
-      state->shadow_offsetY
-    );
-  }
-
-  memcpy(state->shm_data, state->offscreen_buffer, pixel_count * sizeof(uint32_t));
-
-  wl_surface_attach(state->surface, state->buffer, 0, 0);
-  wl_surface_damage_buffer(state->surface, 0, 0, state->width, state->height);
-  wl_surface_commit(state->surface);
+	wl_surface_attach(state->surface, state->buffer, 0, 0);
+	wl_surface_damage_buffer(state->surface, 0, 0, state->width, state->height);
+	wl_surface_commit(state->surface);
 }

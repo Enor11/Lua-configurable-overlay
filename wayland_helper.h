@@ -4,6 +4,9 @@
 #include "app_state.h"
 
 struct wl_buffer *create_buffer(struct wayland_state *state);
+void request_surface_size(struct wayland_state *state, int width, int height);
+void apply_surface_size(struct wayland_state *state, int width, int height);
+void update_window_margins(struct wayland_state *state);
 
 extern const struct wl_output_listener output_listener;
 extern const struct zwlr_layer_surface_v1_listener layer_surface_listener;
